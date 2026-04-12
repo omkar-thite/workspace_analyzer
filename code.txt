@@ -188,4 +188,23 @@ async def delete_user_api(user_id: int, db: Annotated[AsyncSession, Depends(get_
     await db.delete(user)
     await db.commit()
 
+class UserBase(BaseModel):
+    username: str = Field(min_length=1, max_length=50)
+    email: EmailStr = Field(max_length=120)
+
+    def __stre__(self):
+        return 'User'
+
+class UserCreate(UserBase):
+    password: str = Field(min_length=8)
+    
+
+class UserPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)  # Let pydantic read from models
+ 
+    id: int
+    username: str
+    image_file: str | None
+    image_path: str             # defined property in User model
+
 

@@ -12,11 +12,6 @@ with open("code.txt") as f:
     code = f.read()
 
 tree = ast.parse(code)
-        
-     
-# for node in ast.walk(tree):
-#     if isinstance(node, ast.FunctionDef):
-#         print(f"Found function: {node.name} at line {node.lineno}")
 
 # Visitor pattern — more structured
 class FunctionAnalyzer(ast.NodeVisitor):
@@ -73,6 +68,7 @@ class FunctionAnalyzer(ast.NodeVisitor):
         walk_without_nested_scopes(func_node)
         return local_vars or ''
         
+
     def return_names(self, func_node):
         returns = []
 
@@ -92,6 +88,7 @@ class FunctionAnalyzer(ast.NodeVisitor):
         walk_without_nested_scopes(func_node)
         return returns
 
+
     def return_calls(self, func_node):
         calls = set()
 
@@ -110,10 +107,12 @@ class FunctionAnalyzer(ast.NodeVisitor):
         walk_without_nested_scopes(func_node)
         return sorted(calls)
 
+
     def _build_return_entry(self, value_node):
         return {
             self._return_value_repr(value_node): self._infer_return_type(value_node),
         }
+
 
     def _return_value_repr(self, value_node):
         if value_node is None:
@@ -156,12 +155,10 @@ class FunctionAnalyzer(ast.NodeVisitor):
 
     def _attribute_call_name(self, attr_node):
         # For object method calls, keep the method name only.
-        # Example: result.scalars() -> scalars
         if isinstance(attr_node.value, (ast.Name, ast.Attribute)):
             return attr_node.attr
 
         # For chained method calls, preserve the meaningful method chain.
-        # Example: result.scalars().first() -> scalars().first
         if isinstance(attr_node.value, ast.Call):
             inner_func = attr_node.value.func
             if isinstance(inner_func, ast.Attribute):
@@ -198,6 +195,21 @@ def _format_function_entry(func_entry):
     return f"{{{name}: {{locals: {locals_text}, returns: {returns_text}, calls: {calls_text}}}}}"
 
 
+def _format_class_entry(class_entry):
+    class_name, details = next(iter(class_entry.items()))
+    bases_text = _format_collection(details.get("sup_cls", []))
+    class_vars_text = _format_collection(details.get("cls_vars", []))
+    instance_vars_text = _format_collection(details.get("inst_vars", []))
+    methods = details.get("methods", [])
+    method_text = ", ".join(_format_function_entry(method) for method in methods)
+    return (
+        f"{{{class_name}: {{sup_cls: [{bases_text}], "
+        f"cls_vars: [{class_vars_text}], "
+        f"inst_vars: [{instance_vars_text}], "
+        f"methods: [{method_text}]}}}}"
+    )
+
+
 class NestedFunctionAnalyzer(ast.NodeVisitor):
     def __init__(self):
         self.nested_functions = []
@@ -227,36 +239,129 @@ class NestedFunctionAnalyzer(ast.NodeVisitor):
 
 class ModuleAnalyzer(ast.NodeVisitor):
     def __init__(self):
+        super().__init__()
         self.functions = []
         self.classes = []
+        self._class_depth = 0
+
+    def _extract_name_targets(self, target):
+        names = set()
+        if isinstance(target, ast.Name):
+            names.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                names.update(self._extract_name_targets(elt))
+        return names
+
+    def _extract_instance_attribute(self, target):
+        if (
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "self"
+        ):
+            return target.attr
+        return None
+
+    def _class_variables(self, class_node):
+        class_vars = set()
+        for child in class_node.body:
+            if isinstance(child, ast.Assign):
+                for target in child.targets:
+                    class_vars.update(self._extract_name_targets(target))
+            elif isinstance(child, ast.AnnAssign):
+                class_vars.update(self._extract_name_targets(child.target))
+        return sorted(class_vars)
+
+    def _instance_variables(self, class_node):
+        instance_vars = set()
+
+        def walk_method_without_nested_scopes(node, method_root):
+            if node is not method_root and isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+            ):
+                return
+
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    attr = self._extract_instance_attribute(target)
+                    if attr:
+                        instance_vars.add(attr)
+            elif isinstance(node, ast.AnnAssign):
+                attr = self._extract_instance_attribute(node.target)
+                if attr:
+                    instance_vars.add(attr)
+            elif isinstance(node, ast.AugAssign):
+                attr = self._extract_instance_attribute(node.target)
+                if attr:
+                    instance_vars.add(attr)
+
+            for inner in ast.iter_child_nodes(node):
+                walk_method_without_nested_scopes(inner, method_root)
+
+        for child in class_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                walk_method_without_nested_scopes(child, child)
+
+        return sorted(instance_vars)
+
+    def _class_methods(self, class_node):
+        methods = []
+        for child in class_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                func = FunctionAnalyzer().visit(child)
+                methods.append({child.name: {
+                    "locals": func.locals,
+                    "returns": func.returns,
+                    "calls": func.calls,
+                }})
+        return methods
 
     def visit_FunctionDef(self, node):
-        func = FunctionAnalyzer().visit(node)
-        self.functions.append({node.name: {
-            "locals": func.locals,
-            "returns": func.returns,
-            "calls": func.calls,
-        }})
+        if self._class_depth == 0:
+            func = FunctionAnalyzer().visit(node)
+            self.functions.append({node.name: {
+                "locals": func.locals,
+                "returns": func.returns,
+                "calls": func.calls,
+            }})
         self.generic_visit(node)
 
     def visit_AsyncFunctionDef(self, node):
-        func = FunctionAnalyzer().visit(node)
-        self.functions.append({node.name: {
-            "locals": func.locals,
-            "returns": func.returns,
-            "calls": func.calls,
-        }})
+        if self._class_depth == 0:
+            func = FunctionAnalyzer().visit(node)
+            self.functions.append({node.name: {
+                "locals": func.locals,
+                "returns": func.returns,
+                "calls": func.calls,
+            }})
         self.generic_visit(node)
 
     def visit_ClassDef(self, node):
-        self.classes.append(node.name)
+        superclasses = [ast.unparse(base) for base in node.bases]
+        class_variables = self._class_variables(node)
+        instance_variables = self._instance_variables(node)
+        methods = self._class_methods(node)
+
+        self.classes.append({node.name: {
+            "sup_cls": superclasses,
+            "cls_vars": class_variables,
+            "inst_vars": instance_variables,
+            "methods": methods,
+        }})
+
+        self._class_depth += 1
         self.generic_visit(node)
+        self._class_depth -= 1
+    
 
 analyzer = ModuleAnalyzer()
 analyzer.visit(tree)
-nested_analyzer = NestedFunctionAnalyzer()
-nested_analyzer.visit(tree)
+
 print("Functions:")
 for func in analyzer.functions:
     print(_format_function_entry(func))
+
+print("Classes:")
+for class_entry in analyzer.classes:
+    print(_format_class_entry(class_entry))
 
