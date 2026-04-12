@@ -1,3 +1,5 @@
+This is vibe coded project, use it with your own risk. 
+
 # AST Analyzer
 
 AST Analyzer is a small Python toolchain for building a static snapshot of a codebase and turning a git diff into a plain-text impact report.
