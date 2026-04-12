@@ -53,6 +53,16 @@ def diff_change_lines(diff_text: str) -> tuple[list[str], list[str]]:
     return plus_lines, minus_lines
 
 
+def changed_diff_only_text(diff_text: str) -> str:
+    changed_lines: list[str] = []
+    for line in diff_text.splitlines():
+        if line.startswith("+++") or line.startswith("---"):
+            continue
+        if line.startswith("+") or line.startswith("-"):
+            changed_lines.append(line)
+    return "\n".join(changed_lines)
+
+
 def all_known_symbol_keys(snapshot: dict[str, Any]) -> set[str]:
     routes = set(snapshot.get("routes", {}).keys())
     schemas = set(snapshot.get("schemas", {}).keys())
@@ -188,13 +198,9 @@ def render_deleted_section(
     return "\n".join(lines)
 
 
-def main() -> None:
-    args = parse_args()
-
-    snapshot = load_snapshot(Path(args.snapshot))
-    diff_text = read_diff_text(args.diff_file)
-
+def build_report(snapshot: dict[str, Any], diff_text: str) -> str:
     plus_lines, minus_lines = diff_change_lines(diff_text)
+    changed_only_diff = changed_diff_only_text(diff_text)
 
     known_keys = all_known_symbol_keys(snapshot)
     modified_symbols, deleted_symbols = extract_modified_symbols(
@@ -220,24 +226,36 @@ def main() -> None:
     schemas_text = render_section(schema_entries)
     functions_text = render_section(function_entries)
 
-    print("GIT DIFF:")
-    print(diff_text, end="" if diff_text.endswith("\n") else "\n")
-    print()
-    print("DELETED SYMBOLS:")
-    if deleted_text:
-        print(deleted_text)
-    print()
-    print("AFFECTED ROUTES:")
-    if routes_text:
-        print(routes_text)
-    print()
-    print("AFFECTED SCHEMAS:")
-    if schemas_text:
-        print(schemas_text)
-    print()
-    print("AFFECTED FUNCTIONS:")
-    if functions_text:
-        print(functions_text)
+    output: list[str] = ["GIT DIFF:"]
+    if changed_only_diff:
+        output.append(changed_only_diff)
+
+    output.extend(
+        [
+            "",
+            "DELETED SYMBOLS:",
+            deleted_text,
+            "",
+            "AFFECTED ROUTES:",
+            routes_text,
+            "",
+            "AFFECTED SCHEMAS:",
+            schemas_text,
+            "",
+            "AFFECTED FUNCTIONS:",
+            functions_text,
+        ]
+    )
+
+    return "\n".join(output)
+
+
+def main() -> None:
+    args = parse_args()
+
+    snapshot = load_snapshot(Path(args.snapshot))
+    diff_text = read_diff_text(args.diff_file)
+    print(build_report(snapshot, diff_text))
 
 
 if __name__ == "__main__":

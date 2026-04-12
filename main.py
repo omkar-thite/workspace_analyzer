@@ -586,6 +586,9 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
+def test_function(x):
+    return x * 2
+    
 def main() -> None:
     args = parse_args()
     target = Path(args.target).resolve()
@@ -596,6 +599,7 @@ def main() -> None:
     snapshot = gather_workspace_snapshot(target)
     output_path.write_text(json.dumps(snapshot, indent=2, sort_keys=False), encoding="utf-8")
 
+    test_function(5)  # Example function call to demonstrate usage
 
 if __name__ == "__main__":
     main()
