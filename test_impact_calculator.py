@@ -63,6 +63,44 @@ def changed_diff_only_text(diff_text: str) -> str:
     return "\n".join(changed_lines)
 
 
+def extract_file_changes(diff_text: str) -> dict[str, list[str]]:
+    """Extract file paths with their associated changed lines."""
+    file_changes: dict[str, list[str]] = {}
+    current_file: str | None = None
+
+    for line in diff_text.splitlines():
+        if line.startswith("+++"):
+            # Format: +++ b/path/to/file or +++ /dev/null
+            path = line[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            if path and path != "/dev/null":
+                current_file = path
+                if current_file not in file_changes:
+                    file_changes[current_file] = []
+        elif current_file and (line.startswith("+") or line.startswith("-")):
+            file_changes[current_file].append(line)
+        elif line.startswith("diff ") or line.startswith("index "):
+            # Reset on new diff header
+            current_file = None
+
+    return file_changes
+
+
+def render_file_changes(file_changes: dict[str, list[str]]) -> str:
+    """Render file paths with their changes."""
+    if not file_changes:
+        return ""
+
+    lines: list[str] = []
+    for file_path in sorted(file_changes.keys()):
+        changes = file_changes[file_path]
+        if changes:
+            lines.append(f"{file_path}")
+            lines.extend(changes)
+    return "\n".join(lines)
+
+
 def all_known_symbol_keys(snapshot: dict[str, Any]) -> set[str]:
     routes = set(snapshot.get("routes", {}).keys())
     schemas = set(snapshot.get("schemas", {}).keys())
@@ -202,6 +240,10 @@ def build_report(snapshot: dict[str, Any], diff_text: str) -> str:
     plus_lines, minus_lines = diff_change_lines(diff_text)
     changed_only_diff = changed_diff_only_text(diff_text)
 
+    # Extract changed file paths with their changes
+    file_changes = extract_file_changes(diff_text)
+    changed_files = set(file_changes.keys())
+
     known_keys = all_known_symbol_keys(snapshot)
     modified_symbols, deleted_symbols = extract_modified_symbols(
         plus_lines, minus_lines, known_keys
@@ -226,26 +268,7 @@ def build_report(snapshot: dict[str, Any], diff_text: str) -> str:
     schemas_text = render_section(schema_entries)
     functions_text = render_section(function_entries)
 
-    output: list[str] = ["GIT DIFF:"]
-    if changed_only_diff:
-        output.append(changed_only_diff)
-
-    output.extend(
-        [
-            "",
-            "DELETED SYMBOLS:",
-            deleted_text,
-            "",
-            "AFFECTED ROUTES:",
-            routes_text,
-            "",
-            "AFFECTED SCHEMAS:",
-            schemas_text,
-            "",
-            "AFFECTED FUNCTIONS:",
-            functions_text,
-        ]
-    )
+    output: list[str] = ["GIT DIFF:", render_file_changes(file_changes), "", "CHANGED FILES:", "\n".join(sorted(changed_files)) if changed_files else "(none)", "", "DELETED SYMBOLS:", deleted_text, "", "AFFECTED ROUTES:", routes_text, "", "AFFECTED SCHEMAS:", schemas_text, "", "AFFECTED FUNCTIONS:", functions_text]
 
     return "\n".join(output)
 

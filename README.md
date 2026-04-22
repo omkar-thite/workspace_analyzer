@@ -8,7 +8,8 @@ It is designed for test-impact analysis: given a snapshot of known symbols and t
 
 The report is written as plain text with these sections:
 
-- `GIT DIFF:` only the changed lines from the diff, excluding context and `+++` / `---` file headers
+- `GIT DIFF:` changed lines grouped by file, with file paths shown before their `+`/`-` changes
+- `CHANGED FILES:` list of files that were modified
 - `DELETED SYMBOLS:` symbols that appear only in removed diff lines
 - `AFFECTED ROUTES:` impacted route entries from the snapshot
 - `AFFECTED SCHEMAS:` impacted schema entries from the snapshot
@@ -72,12 +73,27 @@ To analyze staged changes instead of the working tree, add `--cached`:
 python3 generate_affected_files_report.py --cached --output affected_files.txt
 ```
 
+To diff against a specific commit (shows changes in that commit vs its parent):
+
+```bash
+python3 generate_affected_files_report.py --commit abc123 --output affected_files.txt
+python3 generate_affected_files_report.py --commit HEAD --output affected_files.txt
+python3 generate_affected_files_report.py --commit HEAD~3 --output affected_files.txt
+```
+
 ## Output Format Example
 
 ```text
 GIT DIFF:
-+    user: UserCreate
--    user: UserCreate
+/schema.py
++    postgres_user: str
++    postgres_password: SecretStr
+/database.py
++from config import settings
+
+CHANGED FILES:
+schema.py
+database.py
 
 DELETED SYMBOLS:
 users.schemas.UserCreate — was referenced by [users.router.create_user_api]
@@ -107,3 +123,18 @@ The exact payload shape depends on what was captured in `snapshot.json`.
 - The diff parser only considers added and removed lines.
 - Context lines are intentionally ignored.
 - Reverse dependency traversal is capped at 3 hops to avoid runaway expansion.
+
+### Ignore Files
+
+Files can be excluded from analysis using ignore patterns in:
+
+- `.gitignore` — standard git ignore patterns
+- `.cursorignore` — cursor-specific ignore patterns
+- `.analyzeignore` — analyzer-specific ignore patterns
+
+Patterns support:
+- Directory patterns (e.g., `tests/`, `docs/`)
+- Exact file paths (e.g., `legacy.py`)
+- Filename matches (e.g., `*.generated.py`)
+
+Ignored files are excluded from both the workspace snapshot and the git diff.

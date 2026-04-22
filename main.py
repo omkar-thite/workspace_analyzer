@@ -39,11 +39,58 @@ class FileContext:
         return ".".join(parts)
 
 
+def parse_ignore_file(path: Path) -> set[str]:
+    """Parse an ignore file and return patterns (without comments and empty lines)."""
+    patterns = set()
+    if not path.exists():
+        return patterns
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            patterns.add(line)
+    return patterns
+
+
+def load_ignore_patterns(root: Path) -> set[str]:
+    """Load ignore patterns from .gitignore, .cursorignore, and .analyzeignore."""
+    patterns = set()
+    ignore_files = [".gitignore", ".cursorignore", ".analyzeignore"]
+    for ignore_file in ignore_files:
+        patterns.update(parse_ignore_file(root / ignore_file))
+    return patterns
+
+
+def matches_ignore(path: Path, root: Path, patterns: set[str]) -> bool:
+    """Check if a path matches any of the ignore patterns."""
+    rel_path = path.relative_to(root)
+    rel_str = str(rel_path)
+    # Also check just the filename for directory-style patterns
+    filename = path.name
+
+    for pattern in patterns:
+        # Directory pattern (ends with /)
+        if pattern.endswith("/"):
+            dir_pattern = pattern.rstrip("/")
+            if dir_pattern in path.parts:
+                return True
+        # Exact match or prefix match
+        if rel_str == pattern or rel_str.startswith(pattern + "/"):
+            return True
+        # Match against filename
+        if filename == pattern or filename.startswith(pattern):
+            return True
+    return False
+
+
 def discover_python_files(root: Path) -> list[Path]:
+    ignore_patterns = load_ignore_patterns(root)
     files = [
         path
         for path in root.rglob("*.py")
-        if ".git" not in path.parts and ".venv" not in path.parts and "__pycache__" not in path.parts
+        if ".git" not in path.parts
+        and ".venv" not in path.parts
+        and "__pycache__" not in path.parts
+        and not matches_ignore(path, root, ignore_patterns)
     ]
     return sorted(files)
 
@@ -588,18 +635,51 @@ def parse_args() -> argparse.Namespace:
 
 def test_function(x):
     return x * 2
-    
+
+def extract_changed_files(diff_text: str) -> list[str]:
+    """Parse the raw git diff to extract the names of changed files."""
+    files = []
+    for line in diff_text.splitlines():
+        if line.startswith("diff --git a/"):
+            # A standard git diff header looks like: diff --git a/main.py b/main.py
+            # Splitting by " b/" isolates the destination file path.
+            parts = line.split(" b/")
+            if len(parts) == 2:
+                files.append(parts[1])
+    return files
+
 def main() -> None:
     args = parse_args()
-    target = Path(args.target).resolve()
+    root = Path(args.root).resolve()
     output_path = Path(args.output)
     if not output_path.is_absolute():
-        output_path = target / output_path
+        output_path = root / output_path
 
-    snapshot = gather_workspace_snapshot(target)
-    output_path.write_text(json.dumps(snapshot, indent=2, sort_keys=False), encoding="utf-8")
+    snapshot_path = Path(args.snapshot)
+    if not snapshot_path.is_absolute():
+        snapshot_path = output_path.parent / snapshot_path
 
-    test_function(5)  # Example function call to demonstrate usage
+    snapshot = gather_workspace_snapshot(root)
+    snapshot_path.write_text(json.dumps(snapshot, indent=2, sort_keys=False), encoding="utf-8")
+
+    diff_text = git_diff_text(root, args.cached, args.commit)
+    
+    # Extract the file paths and build the base report
+    changed_files = extract_changed_files(diff_text)
+    report_text = build_report(snapshot, diff_text)
+    
+    # Format a clean header with the file paths
+    if changed_files:
+        header = "=== CHANGED FILES ===\n" + "\n".join(f"- {f}" for f in changed_files) + "\n\n"
+    else:
+        header = "=== CHANGED FILES ===\nNo files changed.\n\n"
+        
+    # Combine the header with the impact report
+    final_output = header + report_text
+    
+    output_path.write_text(final_output, encoding="utf-8")
+
+    print(f"Wrote {output_path}")
 
 if __name__ == "__main__":
     main()
