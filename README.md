@@ -83,6 +83,23 @@ python3 generate_affected_files_report.py --commit HEAD --output affected_files.
 python3 generate_affected_files_report.py --commit HEAD~3 --output affected_files.txt
 ```
 
+### Security Hardening
+
+By default, CLI output paths are restricted to stay inside the selected analysis root:
+
+- `main.py` resolves `--snapshot` and `--output` under the `target` directory
+- `generate_affected_files_report.py` resolves `--snapshot` and `--output` under `--root`
+
+If a resolved output path escapes the root, the command exits with an error instead of writing.
+
+Use `--allow-outside-root` only when you intentionally need to write files outside the project root:
+
+```bash
+python3 generate_affected_files_report.py \
+  --output /tmp/affected_files.txt \
+  --allow-outside-root
+```
+
 ## Output Format Example
 
 ```text

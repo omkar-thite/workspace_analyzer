@@ -62,12 +62,31 @@ def load_ignore_patterns(root: Path) -> set[str]:
 
 def matches_ignore(path: Path, root: Path, patterns: set[str]) -> bool:
     """Check if a path matches any of the ignore patterns."""
+    # Resolve symlinks to prevent directory traversal
+    try:
+        resolved_path = path.resolve()
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError):
+        # If we can't resolve, be conservative and don't match
+        return False
+    
+    # Ensure the resolved path is within the root (symlink protection)
+    try:
+        resolved_path.relative_to(resolved_root)
+    except ValueError:
+        # Path escapes root - treat as ignored for safety
+        return True
+
     rel_path = path.relative_to(root)
     rel_str = str(rel_path)
     # Also check just the filename for directory-style patterns
     filename = path.name
 
     for pattern in patterns:
+        # Validate pattern to prevent path traversal attacks
+        # Reject patterns that could escape the root directory
+        if pattern.startswith("../") or pattern.startswith("/"):
+            continue
         # Directory pattern (ends with /)
         if pattern.endswith("/"):
             dir_pattern = pattern.rstrip("/")
@@ -84,14 +103,30 @@ def matches_ignore(path: Path, root: Path, patterns: set[str]) -> bool:
 
 def discover_python_files(root: Path) -> list[Path]:
     ignore_patterns = load_ignore_patterns(root)
-    files = [
-        path
-        for path in root.rglob("*.py")
-        if ".git" not in path.parts
-        and ".venv" not in path.parts
-        and "__pycache__" not in path.parts
-        and not matches_ignore(path, root, ignore_patterns)
-    ]
+    
+    # Resolve root to handle symlinks properly
+    try:
+        resolved_root = root.resolve()
+    except (OSError, RuntimeError):
+        resolved_root = root
+    
+    files = []
+    for path in root.rglob("*.py"):
+        # Skip common non-code directories
+        if ".git" in path.parts or ".venv" in path.parts or "__pycache__" in path.parts:
+            continue
+        
+        # Symlink protection: ensure path resolves within root
+        try:
+            resolved_path = path.resolve()
+            resolved_path.relative_to(resolved_root)
+        except (OSError, ValueError, RuntimeError):
+            # Skip symlinks that point outside the root
+            continue
+        
+        if not matches_ignore(path, root, ignore_patterns):
+            files.append(path)
+    
     return sorted(files)
 
 
@@ -627,14 +662,36 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate workspace static snapshot")
     parser.add_argument("target", nargs="?", default=".", help="Target directory to analyze")
     parser.add_argument(
-        "--output",
+        "--snapshot",
         default="snapshot.json",
         help="Snapshot file path (default: target/snapshot.json)",
+    )
+    parser.add_argument(
+        "--output",
+        default="affected_files.txt",
+        help="Report file path (default: target/affected_files.txt)",
+    )
+    parser.add_argument(
+        "--allow-outside-root",
+        action="store_true",
+        help="Allow --snapshot/--output paths outside target",
     )
     return parser.parse_args()
 
 def test_function(x):
     return x * 2
+
+
+def resolve_output_path(root: Path, target: str, allow_outside_root: bool) -> Path:
+    candidate = Path(target)
+    resolved = candidate.resolve() if candidate.is_absolute() else (root / candidate).resolve()
+    if allow_outside_root:
+        return resolved
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        raise SystemExit(f"Refusing to write outside root: {resolved}")
+    return resolved
 
 def extract_changed_files(diff_text: str) -> list[str]:
     """Parse the raw git diff to extract the names of changed files."""
@@ -650,14 +707,9 @@ def extract_changed_files(diff_text: str) -> list[str]:
 
 def main() -> None:
     args = parse_args()
-    root = Path(args.root).resolve()
-    output_path = Path(args.output)
-    if not output_path.is_absolute():
-        output_path = root / output_path
-
-    snapshot_path = Path(args.snapshot)
-    if not snapshot_path.is_absolute():
-        snapshot_path = output_path.parent / snapshot_path
+    root = Path(args.target).resolve()
+    output_path = resolve_output_path(root, args.output, args.allow_outside_root)
+    snapshot_path = resolve_output_path(root, args.snapshot, args.allow_outside_root)
 
     snapshot = gather_workspace_snapshot(root)
     snapshot_path.write_text(json.dumps(snapshot, indent=2, sort_keys=False), encoding="utf-8")

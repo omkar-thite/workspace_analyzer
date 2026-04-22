@@ -24,18 +24,43 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_snapshot(snapshot_path: Path) -> dict[str, Any]:
-    return json.loads(snapshot_path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(snapshot_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        raise SystemExit(f"Invalid JSON in snapshot file: {e}")
+    except OSError as e:
+        raise SystemExit(f"Cannot read snapshot file: {e}")
 
 
 def read_diff_text(diff_file: str | None) -> str:
+    MAX_DIFF_SIZE = 10 * 1024 * 1024  # 10 MB limit
+    
     if diff_file:
-        return Path(diff_file).read_text(encoding="utf-8")
+        path = Path(diff_file)
+        try:
+            with path.open("rb") as fh:
+                data = fh.read(MAX_DIFF_SIZE + 1)
+        except OSError as e:
+            raise SystemExit(f"Cannot read diff file: {e}")
+        if len(data) > MAX_DIFF_SIZE:
+            raise SystemExit(
+                f"Diff file too large ({len(data)} bytes). Maximum allowed: {MAX_DIFF_SIZE} bytes."
+            )
+        return data.decode("utf-8", errors="replace")
+    
     # Avoid blocking forever when no stdin is piped.
     if sys.stdin.isatty():
         raise SystemExit(
             "No diff input detected on stdin. Pipe a git diff or pass --diff-file <path>."
         )
-    return sys.stdin.read()
+    
+    # Read with size limit to prevent DoS
+    stdin = sys.stdin.buffer
+    read_chunk = stdin.read(MAX_DIFF_SIZE + 1)
+    if len(read_chunk) > MAX_DIFF_SIZE:
+        raise SystemExit(f"Diff input too large ({len(read_chunk)} bytes). Maximum allowed: {MAX_DIFF_SIZE} bytes.")
+    
+    return read_chunk.decode("utf-8", errors="replace")
 
 
 def diff_change_lines(diff_text: str) -> tuple[list[str], list[str]]:
